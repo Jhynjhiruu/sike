@@ -1,0 +1,9 @@
+/target
+/.vscode
+
+*.o
+*.obj
+*.txt
+*.elf
+*.c
+*.bak
