@@ -59,6 +59,10 @@ struct Args {
     /// Target the PlayStation (little-endian, mips1)
     #[arg(short, long)]
     playstation: bool,
+
+    /// Verbose
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 fn make_elf(obj: &LnkFile, playstation: bool) -> Result<Vec<u8>> {
@@ -75,7 +79,6 @@ fn make_elf(obj: &LnkFile, playstation: bool) -> Result<Vec<u8>> {
         contents: Vec<u8>,
         locals: Vec<LocalSym>,
         relocations: Vec<Rel>,
-        zeroes: u32,
         offset: u16,
     }
 
@@ -264,7 +267,10 @@ fn make_elf(obj: &LnkFile, playstation: bool) -> Result<Vec<u8>> {
                 let mut cur_sect = sections.get_mut(&cur_section.unwrap());
                 let sect = cur_sect.as_mut().unwrap();
 
-                sect.zeroes = sect.zeroes.wrapping_add(*size);
+                sect.offset = sect.contents.len().try_into()?;
+
+                sect.contents
+                    .resize(sect.contents.len() + *size as usize, 0);
             }
             Opcode::Relocation(r_type, offset, expr) => {
                 let mut cur_sect = sections.get_mut(&cur_section.unwrap());
@@ -291,7 +297,6 @@ fn make_elf(obj: &LnkFile, playstation: bool) -> Result<Vec<u8>> {
                         contents: vec![],
                         locals: vec![],
                         relocations: vec![],
-                        zeroes: 0,
                         offset: 0,
                     },
                 );
@@ -384,7 +389,8 @@ fn make_elf(obj: &LnkFile, playstation: bool) -> Result<Vec<u8>> {
         section_indices.insert(*idx, id);
 
         if obj.section(id).is_bss() {
-            obj.append_section_bss(id, sect.zeroes.into(), sect.alignment.into());
+            assert!(sect.contents.iter().all(|&b| b == 0));
+            obj.append_section_bss(id, sect.contents.len() as _, sect.alignment.into());
         } else {
             obj.set_section_data(id, &sect.contents, sect.alignment.into());
         }
@@ -814,7 +820,9 @@ fn main() -> Result<()> {
     let mut cursor = Cursor::new(&infile);
     let obj = LnkFile::read_le(&mut cursor)?;
 
-    //println!("{:#02X?}", obj);
+    if args.verbose {
+        println!("{:#02X?}", obj);
+    }
 
     let elf = make_elf(&obj, args.playstation)?;
 
