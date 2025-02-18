@@ -33,16 +33,17 @@ use binrw::BinRead;
 use clap::Parser;
 use object::{
     elf::{
-        R_MIPS_26, R_MIPS_32, R_MIPS_GPREL16, R_MIPS_HI16, R_MIPS_LO16, R_MIPS_REL32, SHF_ALLOC,
-        SHF_EXECINSTR, SHF_WRITE, SHT_NOBITS, SHT_NULL, SHT_PROGBITS, STB_GLOBAL, STB_LOCAL,
-        STB_WEAK, STT_OBJECT, STT_SECTION, STV_DEFAULT,
+        EF_MIPS_ABI_O32, EF_MIPS_ARCH_1, EF_MIPS_ARCH_3, ELFOSABI_NONE, R_MIPS_26, R_MIPS_32,
+        R_MIPS_GPREL16, R_MIPS_HI16, R_MIPS_LO16, R_MIPS_REL32, SHF_ALLOC, SHF_EXECINSTR,
+        SHF_WRITE, SHT_NOBITS, SHT_NULL, SHT_PROGBITS, STB_GLOBAL, STB_LOCAL, STB_WEAK, STT_OBJECT,
+        STT_SECTION, STV_DEFAULT,
     },
     write::{
         elf::{FileHeader, Rel, SectionHeader, SectionIndex, Sym, SymbolIndex, Writer},
         Relocation, SectionId, StringId, Symbol, SymbolId, SymbolSection,
     },
-    Architecture, BinaryFormat, Endianness, RelocationFlags, SectionKind, SymbolFlags, SymbolKind,
-    SymbolScope,
+    Architecture, BinaryFormat, Endianness, FileFlags, RelocationFlags, SectionKind, SymbolFlags,
+    SymbolKind, SymbolScope,
 };
 use sike::{ElfExpression, Expression, LnkFile, Opcode, RelocType};
 
@@ -54,9 +55,13 @@ struct Args {
 
     /// Output file
     outfile: PathBuf,
+
+    /// Target the PlayStation (little-endian, mips1)
+    #[arg(short, long)]
+    playstation: bool,
 }
 
-fn make_elf(obj: &LnkFile) -> Result<Vec<u8>> {
+fn make_elf(obj: &LnkFile, playstation: bool) -> Result<Vec<u8>> {
     let mut program_type = None;
 
     const fn info(st_bind: u8, st_type: u8) -> u8 {
@@ -70,6 +75,7 @@ fn make_elf(obj: &LnkFile) -> Result<Vec<u8>> {
         contents: Vec<u8>,
         locals: Vec<LocalSym>,
         relocations: Vec<Rel>,
+        zeroes: u32,
         offset: u16,
     }
 
@@ -254,7 +260,12 @@ fn make_elf(obj: &LnkFile) -> Result<Vec<u8>> {
                 sect.contents.extend(items)
             }
             Opcode::Switch(which) => cur_section = Some(*which),
-            Opcode::Zeroes(_) => todo!(),
+            Opcode::Zeroes(size) => {
+                let mut cur_sect = sections.get_mut(&cur_section.unwrap());
+                let sect = cur_sect.as_mut().unwrap();
+
+                sect.zeroes = sect.zeroes.wrapping_add(*size);
+            }
             Opcode::Relocation(r_type, offset, expr) => {
                 let mut cur_sect = sections.get_mut(&cur_section.unwrap());
                 let sect = cur_sect.as_mut().unwrap();
@@ -280,6 +291,7 @@ fn make_elf(obj: &LnkFile) -> Result<Vec<u8>> {
                         contents: vec![],
                         locals: vec![],
                         relocations: vec![],
+                        zeroes: 0,
                         offset: 0,
                     },
                 );
@@ -342,8 +354,26 @@ fn make_elf(obj: &LnkFile) -> Result<Vec<u8>> {
     //println!("{:#?}", files);
     //println!("{:#?}", symbols);
 
-    let mut obj =
-        object::write::Object::new(BinaryFormat::Elf, Architecture::Mips, Endianness::Big);
+    let mut obj = object::write::Object::new(
+        BinaryFormat::Elf,
+        Architecture::Mips,
+        if playstation {
+            Endianness::Little
+        } else {
+            Endianness::Big
+        },
+    );
+
+    obj.flags = FileFlags::Elf {
+        os_abi: ELFOSABI_NONE,
+        abi_version: 0,
+        e_flags: EF_MIPS_ABI_O32
+            | if playstation {
+                EF_MIPS_ARCH_1
+            } else {
+                EF_MIPS_ARCH_3
+            },
+    };
 
     let mut section_indices = HashMap::new();
 
@@ -353,7 +383,9 @@ fn make_elf(obj: &LnkFile) -> Result<Vec<u8>> {
         let id = obj.add_section(vec![], sect.name.clone().into_bytes(), sect.kind());
         section_indices.insert(*idx, id);
 
-        if !obj.section(id).is_bss() {
+        if obj.section(id).is_bss() {
+            obj.append_section_bss(id, sect.zeroes.into(), sect.alignment.into());
+        } else {
             obj.set_section_data(id, &sect.contents, sect.alignment.into());
         }
 
@@ -480,7 +512,11 @@ fn make_elf(obj: &LnkFile) -> Result<Vec<u8>> {
                 let data = obj.section_mut(section_indices[idx]).data_mut();
 
                 let bytes = array::from_fn::<_, 4, _>(|i| data[offset as usize + i]);
-                let word = u32::from_be_bytes(bytes);
+                let word = if playstation {
+                    u32::from_le_bytes
+                } else {
+                    u32::from_be_bytes
+                }(bytes);
 
                 let (mask, shift) = match r_type {
                     R_MIPS_32 => (0xFFFFFFFF, 0),
@@ -494,7 +530,11 @@ fn make_elf(obj: &LnkFile) -> Result<Vec<u8>> {
 
                 let new_word = (word & inv_mask) | ((addend >> shift) & mask);
 
-                let new_bytes = new_word.to_be_bytes();
+                let new_bytes = if playstation {
+                    new_word.to_le_bytes()
+                } else {
+                    new_word.to_be_bytes()
+                };
 
                 data[offset as usize..offset as usize + 4].copy_from_slice(&new_bytes);
             }
@@ -774,9 +814,9 @@ fn main() -> Result<()> {
     let mut cursor = Cursor::new(&infile);
     let obj = LnkFile::read_le(&mut cursor)?;
 
-    //println!("{:#02X?}", obj);
+    println!("{:#02X?}", obj);
 
-    let elf = make_elf(&obj)?;
+    let elf = make_elf(&obj, args.playstation)?;
 
     write(args.outfile, elf)?;
 

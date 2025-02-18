@@ -55,15 +55,16 @@ impl TryFrom<&Expression> for ElfExpression {
     fn try_from(value: &Expression) -> Result<Self, Self::Error> {
         match value {
             Expression::Symbol(s) => Ok(Self::SymbolOffset(*s, 0)),
-            Expression::Add(l, r) => {
-                if let (Expression::SectionBase(s), Expression::Value(o)) = (&**l, &**r) {
+            Expression::SectionBase(s) => Ok(Self::SectionOffset(*s, 0)),
+            Expression::Add(l, r) => match (&**l, &**r) {
+                (Expression::SectionBase(s), Expression::Value(o))
+                | (Expression::Value(o), Expression::SectionBase(s)) => {
                     Ok(Self::SectionOffset(*s, *o))
-                } else if let (Expression::Value(o), Expression::Symbol(s)) = (&**l, &**r) {
-                    Ok(Self::SymbolOffset(*s, *o))
-                } else {
-                    Err(())
                 }
-            }
+                (Expression::Value(o), Expression::Symbol(s)) => Ok(Self::SymbolOffset(*s, *o)),
+
+                _ => Err(()),
+            },
             _ => Err(()),
         }
     }
