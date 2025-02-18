@@ -814,7 +814,7 @@ fn main() -> Result<()> {
     let mut cursor = Cursor::new(&infile);
     let obj = LnkFile::read_le(&mut cursor)?;
 
-    println!("{:#02X?}", obj);
+    //println!("{:#02X?}", obj);
 
     let elf = make_elf(&obj, args.playstation)?;
 
