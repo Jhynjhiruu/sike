@@ -534,11 +534,9 @@ fn make_elf(obj: &LnkFile, playstation: bool) -> Result<Vec<u8>> {
 
                 let inv_mask = !mask;
 
-                let rem = word & inv_mask;
+                let new_word = (word & inv_mask) | ((addend >> shift) & mask);
 
-                let new_word = (rem) | ((addend >> shift) & mask);
-
-                let new_word = if r_type == R_MIPS_HI16 && rem & 0x8000 != 0 {
+                let new_word = if r_type == R_MIPS_HI16 && addend & 0x8000 != 0 {
                     new_word + 1
                 } else {
                     new_word
