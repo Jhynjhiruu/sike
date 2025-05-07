@@ -79,7 +79,7 @@ fn make_elf(obj: &LnkFile, playstation: bool) -> Result<Vec<u8>> {
         contents: Vec<u8>,
         locals: Vec<LocalSym>,
         relocations: Vec<Rel>,
-        offset: u16,
+        offset: u32,
     }
 
     impl Section {
@@ -197,7 +197,7 @@ fn make_elf(obj: &LnkFile, playstation: bool) -> Result<Vec<u8>> {
     #[derive(Debug, Clone)]
     struct Rel {
         r_type: RelocType,
-        offset: u16,
+        offset: u32,
         expr: Expression,
     }
 
@@ -232,7 +232,7 @@ fn make_elf(obj: &LnkFile, playstation: bool) -> Result<Vec<u8>> {
     impl Eq for Rel {}
 
     impl Rel {
-        const fn type_offset(&self) -> (u32, u16) {
+        const fn type_offset(&self) -> (u32, u32) {
             match &self.r_type {
                 RelocType::Rel32BE | RelocType::Rel32 => (R_MIPS_32, self.offset & !3),
                 RelocType::Rel26BE | RelocType::Rel26 => (R_MIPS_26, self.offset & !3),
@@ -278,7 +278,7 @@ fn make_elf(obj: &LnkFile, playstation: bool) -> Result<Vec<u8>> {
 
                 sect.relocations.push(Rel {
                     r_type: *r_type,
-                    offset: offset.wrapping_add(sect.offset),
+                    offset: sect.offset + u32::from(*offset),
                     expr: expr.clone(),
                 })
             }
