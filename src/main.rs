@@ -68,182 +68,7 @@ struct Args {
 fn make_elf(obj: &LnkFile, playstation: bool) -> Result<Vec<u8>> {
     let mut program_type = None;
 
-    const fn info(st_bind: u8, st_type: u8) -> u8 {
-        ((st_bind & 0x0F) << 4) | (st_type & 0x0F)
-    }
-
-    #[derive(Debug)]
-    struct Section {
-        alignment: u8,
-        name: String,
-        contents: Vec<u8>,
-        locals: Vec<LocalSym>,
-        relocations: Vec<Rel>,
-        offset: u32,
-    }
-
-    impl Section {
-        fn kind(&self) -> SectionKind {
-            match self.name.as_str() {
-                ".text" => SectionKind::Text,
-                ".data" => SectionKind::Data,
-                ".bss" => SectionKind::UninitializedData,
-                ".rdata" => SectionKind::ReadOnlyData,
-                ".ctors" => SectionKind::ReadOnlyData,
-                ".dtors" => SectionKind::ReadOnlyData,
-                ".sdata" => SectionKind::Other,
-                ".sbss" => SectionKind::UninitializedData,
-                _ => todo!("{}", self.name),
-            }
-        }
-
-        const fn st_info(&self) -> u8 {
-            info(STB_LOCAL, STT_SECTION)
-        }
-
-        const fn st_other(&self) -> u8 {
-            STV_DEFAULT
-        }
-    }
-
-    #[derive(Debug)]
-    enum SymType {
-        Exported { sect: u16, offset: u32 },
-        Imported,
-        Uninit { sect: u16, size: u32 },
-    }
-
-    #[derive(Debug)]
-    pub struct Sym {
-        sym_type: SymType,
-        name: String,
-    }
-
-    impl Sym {
-        fn exported(sect: u16, offset: u32, name: String) -> Self {
-            Self {
-                sym_type: SymType::Exported { sect, offset },
-                name,
-            }
-        }
-
-        fn imported(name: String) -> Self {
-            Self {
-                sym_type: SymType::Imported,
-                name,
-            }
-        }
-
-        fn uninit(sect: u16, size: u32, name: String) -> Self {
-            Self {
-                sym_type: SymType::Uninit { sect, size },
-                name,
-            }
-        }
-
-        const fn value(&self) -> u32 {
-            match &self.sym_type {
-                SymType::Exported { offset, .. } => *offset,
-                SymType::Imported => 0,
-                SymType::Uninit { .. } => 0,
-            }
-        }
-
-        const fn kind(&self) -> SymbolKind {
-            SymbolKind::Data
-        }
-
-        const fn weak(&self) -> bool {
-            match &self.sym_type {
-                SymType::Exported { .. } => false,
-                SymType::Imported => true,
-                SymType::Uninit { .. } => false,
-            }
-        }
-
-        fn sect(&self, sects: &HashMap<u16, SectionId>) -> SymbolSection {
-            match &self.sym_type {
-                SymType::Exported { sect, .. } => SymbolSection::Section(sects[sect]),
-                SymType::Imported => SymbolSection::Undefined,
-                SymType::Uninit { sect, .. } => SymbolSection::Section(sects[sect]),
-            }
-        }
-
-        fn flags(&self) -> SymbolFlags<SectionId, SymbolId> {
-            let st_info = match &self.sym_type {
-                SymType::Exported { .. } => info(STB_GLOBAL, STT_OBJECT),
-                SymType::Imported => info(STB_WEAK, STT_OBJECT),
-                SymType::Uninit { .. } => info(STB_GLOBAL, STT_OBJECT),
-            };
-
-            let st_other = STV_DEFAULT;
-
-            SymbolFlags::Elf { st_info, st_other }
-        }
-    }
-
-    #[derive(Debug)]
-    struct LocalSym {
-        offset: u32,
-        name: String,
-    }
-
-    impl LocalSym {
-        const fn kind(&self) -> SymbolKind {
-            SymbolKind::Data
-        }
-    }
-
-    #[derive(Debug, Clone)]
-    struct Rel {
-        r_type: RelocType,
-        offset: u32,
-        expr: Expression,
-    }
-
-    impl Ord for Rel {
-        fn cmp(&self, other: &Self) -> Ordering {
-            if self.expr == other.expr {
-                self.r_type.cmp(&other.r_type)
-            } else {
-                let hash = |ex: &Expression| {
-                    let mut hasher = DefaultHasher::new();
-                    ex.hash(&mut hasher);
-                    hasher.finish()
-                };
-
-                hash(&self.expr).cmp(&hash(&other.expr))
-            }
-        }
-    }
-
-    impl PartialOrd for Rel {
-        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-            Some(self.cmp(other))
-        }
-    }
-
-    impl PartialEq for Rel {
-        fn eq(&self, other: &Self) -> bool {
-            self.cmp(other) == Ordering::Equal
-        }
-    }
-
-    impl Eq for Rel {}
-
-    impl Rel {
-        const fn type_offset(&self) -> (u32, u32) {
-            match &self.r_type {
-                RelocType::Rel32BE | RelocType::Rel32 => (R_MIPS_32, self.offset & !3),
-                RelocType::Rel26BE | RelocType::Rel26 => (R_MIPS_26, self.offset & !3),
-                RelocType::Hi16BE | RelocType::Hi16 => (R_MIPS_HI16, self.offset & !3),
-                RelocType::Lo16BE | RelocType::Lo16 => (R_MIPS_LO16, self.offset & !3),
-                RelocType::GPRel16 => (R_MIPS_GPREL16, self.offset & !3),
-            }
-        }
-    }
-
-    let mut sections: HashMap<u16, Section> = HashMap::new();
+    let mut sections: HashMap<u16, sike::Section> = HashMap::new();
 
     let mut files = HashMap::new();
 
@@ -276,22 +101,22 @@ fn make_elf(obj: &LnkFile, playstation: bool) -> Result<Vec<u8>> {
                 let mut cur_sect = sections.get_mut(&cur_section.unwrap());
                 let sect = cur_sect.as_mut().unwrap();
 
-                sect.relocations.push(Rel {
+                sect.relocations.push(sike::Rel {
                     r_type: *r_type,
                     offset: sect.offset + u32::from(*offset),
                     expr: expr.clone(),
                 })
             }
             Opcode::ExportedSymbol(idx, sect, offset, name) => {
-                symbols.insert(*idx, Sym::exported(*sect, *offset, name.to_string()));
+                symbols.insert(*idx, sike::Sym::exported(*sect, *offset, name.to_string()));
             }
             Opcode::ImportedSymbol(idx, name) => {
-                symbols.insert(*idx, Sym::imported(name.to_string()));
+                symbols.insert(*idx, sike::Sym::imported(name.to_string()));
             }
             Opcode::Section(idx, group, align, name) => {
                 sections.insert(
                     *idx,
-                    Section {
+                    sike::Section {
                         alignment: *align,
                         name: name.to_string(),
                         contents: vec![],
@@ -305,7 +130,7 @@ fn make_elf(obj: &LnkFile, playstation: bool) -> Result<Vec<u8>> {
                 let mut cur_sect = sections.get_mut(sect);
                 let sect = cur_sect.as_mut().unwrap();
 
-                sect.locals.push(LocalSym {
+                sect.locals.push(sike::LocalSym {
                     offset: *offset,
                     name: name.to_string(),
                 })
@@ -333,7 +158,7 @@ fn make_elf(obj: &LnkFile, playstation: bool) -> Result<Vec<u8>> {
                     }
                 }
 
-                symbols.insert(*idx, Sym::uninit(*sect, *size, name.to_string()));
+                symbols.insert(*idx, sike::Sym::uninit(*sect, *size, name.to_string()));
             }
             Opcode::IncSldLineNum(_) => todo!(),
             Opcode::IncSldLineNumByByte(_, _) => todo!(),
@@ -405,7 +230,7 @@ fn make_elf(obj: &LnkFile, playstation: bool) -> Result<Vec<u8>> {
                 weak: false,
                 section: SymbolSection::Section(id),
                 flags: SymbolFlags::Elf {
-                    st_info: info(STB_LOCAL, STT_OBJECT),
+                    st_info: sike::info(STB_LOCAL, STT_OBJECT),
                     st_other: STV_DEFAULT,
                 },
             });
@@ -416,8 +241,8 @@ fn make_elf(obj: &LnkFile, playstation: bool) -> Result<Vec<u8>> {
 
     let mut symbol_indices = HashMap::new();
 
-    let mut sorted_symbols = symbols.into_iter().collect::<Vec<_>>();
-    sorted_symbols.sort_by_key(|(i, _)| *i);
+    let mut sorted_symbols = symbols.iter().collect::<Vec<_>>();
+    sorted_symbols.sort_by_key(|(i, _)| **i);
 
     for (idx, sym) in &sorted_symbols {
         let id = obj.add_symbol(Symbol {
@@ -430,7 +255,7 @@ fn make_elf(obj: &LnkFile, playstation: bool) -> Result<Vec<u8>> {
             section: sym.sect(&section_indices),
             flags: sym.flags(),
         });
-        if let &SymType::Uninit { sect, size } = &sym.sym_type {
+        if let &sike::SymType::Uninit { sect, size } = &sym.sym_type {
             obj.add_symbol_bss(
                 id,
                 section_indices[&sect],
@@ -501,8 +326,8 @@ fn make_elf(obj: &LnkFile, playstation: bool) -> Result<Vec<u8>> {
         for rel in relocs {
             //println!("{:?}", rel);
             let Ok(expr) = ElfExpression::try_from(&rel.expr) else {
-                println!("unhandled expression: {:?}", rel.expr);
-                continue;
+
+                panic!("unhandled expression: {}", rel.expr.pretty_print(&symbols, &sections));
             };
 
             let (symbol, addend) = match expr {
