@@ -245,17 +245,17 @@ impl Expression {
             Self::SectionStart(sect) => format!("%start({})", sections[sect].name),
             Self::SectionEnd(sect) => format!("%end({})", sections[sect].name),
             Self::Add(l, r) => format!(
-                "({}) + ({})",
+                "({} + {})",
                 r.pretty_print(symbols, sections),
                 l.pretty_print(symbols, sections)
             ),
             Self::Sub(l, r) => format!(
-                "({}) - ({})",
+                "({} - {})",
                 r.pretty_print(symbols, sections),
                 l.pretty_print(symbols, sections)
             ),
             Self::Div(l, r) => format!(
-                "({}) / ({})",
+                "({} / {})",
                 r.pretty_print(symbols, sections),
                 l.pretty_print(symbols, sections)
             ),
